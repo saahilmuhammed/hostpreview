@@ -23,7 +23,7 @@ function showMessage(text, type) {
 function showPreview(previewUrl) {
   // Get full URL for sharing
   const fullUrl = window.location.origin + previewUrl;
-  previewContainer.innerHTML = `<iframe class="preview-frame" src="${previewUrl}" sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-top-navigation-by-user-activation allow-modals"></iframe>`;
+  previewContainer.innerHTML = `<iframe class="preview-frame" src="${previewUrl}" sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"></iframe>`;
   previewUrlDiv.innerHTML = `<a href="${fullUrl}" target="_blank" class="preview-link">${fullUrl}</a> <button onclick="copyPreviewLink('${fullUrl}')" class="copy-btn" title="Copy link">📋</button>`;
 }
 
@@ -55,6 +55,29 @@ function validateIP(ip) {
 function validateDomain(domain) {
   const domainRegex = /^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$/i;
   return domainRegex.test(domain);
+}
+
+async function fetchPreviewLink(domain, ip) {
+  try {
+    const response = await fetch('/api/preview-link', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ domain, ip }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || 'Failed to generate preview link');
+    }
+
+    const data = await response.json();
+    return data.previewUrl;
+  } catch (error) {
+    showMessage(`Error: ${error.message}`, 'error');
+    throw error;
+  }
 }
 
 form.addEventListener('submit', async (e) => {

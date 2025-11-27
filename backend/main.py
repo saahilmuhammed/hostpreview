@@ -9,6 +9,7 @@ import gzip
 import zlib
 from typing import Optional
 from bs4 import BeautifulSoup
+import logging
 
 app = FastAPI()
 
@@ -19,6 +20,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("preview_proxy")
 
 class PreviewRequest(BaseModel):
     domain: str
@@ -158,22 +162,31 @@ async def preview_proxy(preview_id: str, full_path: str = "", request: Request =
                                 if attr in tag.attrs:
                                     url = tag.attrs[attr]
                                     if isinstance(url, str):
-                                        # Protocol-relative //foo.bar (leave as is or force https)
-                                        if url.startswith("//"):
-                                            tag.attrs[attr] = "https:" + url
-                                            continue
-                                        # "/domain.com/..." or "/fonts.googleapis.com/..." (external): rewrite to https
-                                        if re.match(r"^/[a-zA-Z0-9\-\.]+\.[a-z]{2,}(/|$)", url):
-                                            tag.attrs[attr] = "https://" + url.lstrip("/")
-                                            continue
-                                        # Only rewrite root-relative true paths
-                                        if url.startswith("/") and not url.startswith("/preview/"):
-                                            tag.attrs[attr] = preview_prefix + url.lstrip("/")
+                                        try:
+                                            # Protocol-relative //foo.bar (leave as is or force https)
+                                            if url.startswith("//"):
+                                                tag.attrs[attr] = "https:" + url
+                                                continue
+                                            # External URLs (e.g., /domain.com/...): rewrite to https
+                                            if re.match(r"^/[a-zA-Z0-9\-.]+\.[a-z]{2,}(/|$)", url):
+                                                tag.attrs[attr] = "https://" + url.lstrip("/")
+                                                continue
+                                            # Root-relative paths
+                                            if url.startswith("/") and not url.startswith("/preview/"):
+                                                tag.attrs[attr] = preview_prefix + url.lstrip("/")
+                                        except Exception as e:
+                                            pass  # Log or handle specific URL parsing errors
                         for style_tag in soup.find_all("style"):
                             if style_tag.string:
-                                style_tag.string = rewrite_css_urls(style_tag.string, preview_prefix)
+                                try:
+                                    style_tag.string = rewrite_css_urls(style_tag.string, preview_prefix)
+                                except Exception as e:
+                                    pass  # Log or handle specific CSS parsing errors
                         for tag in soup.find_all(style=True):
-                            tag['style'] = rewrite_css_urls(tag['style'], preview_prefix)
+                            try:
+                                tag['style'] = rewrite_css_urls(tag['style'], preview_prefix)
+                            except Exception as e:
+                                pass  # Log or handle specific inline style errors
                         content = soup.encode(charset)
                     except Exception as ex:
                         pass
@@ -191,6 +204,7 @@ async def preview_proxy(preview_id: str, full_path: str = "", request: Request =
                 media_type=content_type
             )
         except httpx.TimeoutException:
+            logger.error(f"Timeout while connecting to {target_url}")
             if scheme == "https":
                 continue
             raise HTTPException(
@@ -198,6 +212,7 @@ async def preview_proxy(preview_id: str, full_path: str = "", request: Request =
                 detail=f"Connection timeout. The server at {ip} is not responding. Please verify the IP address is correct."
             )
         except httpx.ConnectError:
+            logger.error(f"Connection error while connecting to {target_url}")
             if scheme == "https":
                 continue
             raise HTTPException(
@@ -205,11 +220,13 @@ async def preview_proxy(preview_id: str, full_path: str = "", request: Request =
                 detail=f"Cannot connect to {ip}. Please verify the IP address is correct and the server is accessible."
             )
         except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP status error {e.response.status_code} while connecting to {target_url}")
             raise HTTPException(
                 status_code=e.response.status_code,
                 detail=f"Server returned error: {e.response.status_code}"
             )
         except Exception as e:
+            logger.exception(f"Unexpected error while connecting to {target_url}: {str(e)}")
             if scheme == "https":
                 continue
             raise HTTPException(
